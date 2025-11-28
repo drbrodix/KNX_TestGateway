@@ -5,6 +5,7 @@
 
 #pragma region Definitions
 
+#define LOG_STR_BUFF_LEN          64
 #define BUFF_LEN                  128
 #define KNX_PORT                  3671
 #define KNX_MULTICAST_ADDR        "224.0.23.12"
@@ -173,13 +174,13 @@ uint16_t writeDIBSSInBuff(uint8_t *buff, uint16_t *totalLen) {
       SUPP_SVC_FAMILIES; //< Description type: Supported service family
   ++(*totalLen);
   *(uint16_t *)(buff + (*totalLen)) =
-      htons(MAKEWORD(FAMILY_CORE, 0x02)); //< KNXnet/IP Core v2
+      MAKEWORD(FAMILY_CORE, 0x02); //< KNXnet/IP Core v2
   (*totalLen) += 2;
   //  *(uint16_t *)(buff + (*totalLen)) =
   //      htons(0x0302); //< KNXnet/IP Device Management v2
   //  (*totalLen) += 2;
   *(uint16_t *)(buff + (*totalLen)) =
-      htons(MAKEWORD(FAMILY_TUNNELING, 0x02)); //< KNXnet/IP Tunneling v2
+      MAKEWORD(FAMILY_TUNNELING, 0x02); //< KNXnet/IP Tunneling v2
   (*totalLen) += 2;
   return (*totalLen);
 }
@@ -188,7 +189,7 @@ uint16_t writeDIBSSInBuff(uint8_t *buff, uint16_t *totalLen) {
 
 #pragma region KNX Buffer Write Function
 
-uint16_t writeInBuff(uint8_t *buff, KNXServiceType action) {
+uint16_t writeInBuff(uint8_t *buff, KNXServiceType action, char *logStrBuff) {
 
   uint16_t totalLen         = 0;
   const uint8_t totalLenInd = 4;
@@ -201,6 +202,8 @@ uint16_t writeInBuff(uint8_t *buff, KNXServiceType action) {
 
   switch (action) {
   case ST_SEARCH_RESPONSE:
+    strcpy_s(logStrBuff, LOG_STR_BUFF_LEN, "Search Response");
+
   case ST_SEARCH_RESPONSE_EXTENDED:
 
     /* HPAI Control Endpoint */
@@ -212,6 +215,8 @@ uint16_t writeInBuff(uint8_t *buff, KNXServiceType action) {
     /* Supported Service: Tunneling */
     writeDIBSSInBuff(buff, &totalLen);
 
+    strcpy_s(logStrBuff, LOG_STR_BUFF_LEN, "Search Response Extended");
+
     break;
 
   case ST_DESCRIPTION_RESPONSE:
@@ -221,6 +226,8 @@ uint16_t writeInBuff(uint8_t *buff, KNXServiceType action) {
 
     /* Supported Service: Tunneling */
     writeDIBSSInBuff(buff, &totalLen);
+
+    strcpy_s(logStrBuff, LOG_STR_BUFF_LEN, "Description Response");
 
     break;
 
@@ -234,17 +241,30 @@ uint16_t writeInBuff(uint8_t *buff, KNXServiceType action) {
     writeHPAIInBuff(buff, &totalLen);
     writeCRDTunnConnInBuff(buff, &totalLen);
 
+    strcpy_s(logStrBuff, LOG_STR_BUFF_LEN, "Connect Response");
+
     break;
 
   case ST_CONNECTIONSTATE_RESPONSE:
-    return 0;
-    break;
-
+    strcpy_s(logStrBuff, LOG_STR_BUFF_LEN, "Connection State Response");
   case ST_DISCONNECT_RESPONSE:
-    return 0;
+
+    /*
+     * Communication Channel ID.
+     * Always 1, because we won't support more channels for now.
+     */
+    *(buff + totalLen) = 0x01;
+    ++totalLen;
+    *(buff + totalLen) = E_NO_ERROR; //< Status code
+    ++totalLen;
+
+    strcpy_s(logStrBuff, LOG_STR_BUFF_LEN, "Disconnect Response");
+
     break;
 
   case ST_TUNNELING_ACK:
+
+    strcpy_s(logStrBuff, LOG_STR_BUFF_LEN, "Tunneling Acknowledgement");
     break;
 
   default:
@@ -434,7 +454,7 @@ int main(void) {
           break;
         }
 
-        printf("%s from address %d.%d.%d.%d:\n", srvcStr,
+        printf("Received %s from address %d.%d.%d.%d:\n", srvcStr,
                clientAddr.sin_addr.S_un.S_un_b.s_b1,
                clientAddr.sin_addr.S_un.S_un_b.s_b2,
                clientAddr.sin_addr.S_un.S_un_b.s_b3,
@@ -443,14 +463,16 @@ int main(void) {
         for (int i = 0; i < recvLen; ++i) {
           printf("0x%x ", rxBuff[i]);
         }
-        printf("\n");
+        printf("\n\n");
         ZeroMemory(rxBuff, BUFF_LEN);
         recvLen = 0;
       }
       break;
 
     case COM_SENDING: {
-      const uint16_t buffLen = writeInBuff(txBuff, action);
+      char srvcStr[64];
+
+      const uint16_t buffLen = writeInBuff(txBuff, action, srvcStr);
 
       if (sendto(serverSocket, (const char *)txBuff, buffLen, 0,
                  (const struct sockaddr *)&clientAddr,
@@ -458,11 +480,16 @@ int main(void) {
         fprintf(stderr, "Failed to send message.\nError: %d",
                 WSAGetLastError());
       } else {
-        printf("Sent message to address %d.%d.%d.%d:\n",
+        printf("Sent %s to address %d.%d.%d.%d:\n", srvcStr,
                clientAddr.sin_addr.S_un.S_un_b.s_b1,
                clientAddr.sin_addr.S_un.S_un_b.s_b2,
                clientAddr.sin_addr.S_un.S_un_b.s_b3,
                clientAddr.sin_addr.S_un.S_un_b.s_b4);
+
+        for (int i = 0; i < buffLen; ++i) {
+          printf("0x%x ", txBuff[i]);
+        }
+        printf("\n\n");
       }
       commType = COM_RECEIVING;
     } break;
