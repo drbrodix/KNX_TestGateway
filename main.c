@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <ws2tcpip.h>
 
+#pragma region Definitions
+
 #define BUFF_LEN                  128
 #define KNX_PORT                  3671
 #define KNX_MULTICAST_ADDR        "224.0.23.12"
@@ -10,14 +12,56 @@
 
 typedef enum CommType { COM_RECEIVING, COM_SENDING } CommType;
 
-// typedef enum Action {
-//   ACT_IDLE,
-//   ACT_SEARCH_RES,
-//   ACT_DESCRIPTION_RES,
-//   ACT_CONNECT_RES,
-//   ACT_CONNECTIONSTATE_RES,
-//   ACT_DISCONNECT_RES
-// } Action;
+typedef enum KNXServiceFamily {
+  FAMILY_CORE      = 0x02,
+  FAMILY_DEV_MGMT  = 0x03,
+  FAMILY_TUNNELING = 0x04,
+  FAMILY_ROUTING   = 0x05
+} KNXServiceFamily;
+
+typedef enum KNXConnectionType {
+  DEVICE_MGMT_CONNECTION = 0x03,
+  TUNNEL_CONNECTION      = 0x04,
+  REMLOG_CONNECTION      = 0x06,
+  REMCONF_CONNECTION     = 0x07,
+  OBJSVR_CONNECTION      = 0x08
+} KNXConnectionType;
+
+typedef enum KNXDescriptionType {
+  DEVICE_INFO       = 0x01,
+  SUPP_SVC_FAMILIES = 0x02,
+  IP_CONFIG         = 0x03,
+  IP_CUR_CONFIG     = 0x04,
+  KNX_ADDRESSES     = 0x05
+} KNXDescriptionType;
+
+typedef enum KNXMedium {
+  TP1    = 0x02,
+  PL110  = 0x04,
+  RF     = 0x10,
+  KNX_IP = 0x20
+} KNXMedium;
+
+typedef enum DeviceStatus {
+  DEVICE_STATUS_PROG_MODE_OFF = 0x00,
+  DEVICE_STATUS_PROG_MODE_ON  = 0x01
+} DeviceStatus;
+
+typedef enum HostProtocol { IPV4_UDP = 0x01, IPV4_TCP = 0x02 } HostProtocol;
+
+typedef enum TunnelingLayer {
+  TUNNEL_LINKLAYER  = 0x02,
+  TUNNEL_RAW        = 0x04,
+  TUNNEL_BUSMONITOR = 0x80
+} TunnelingLayer;
+
+typedef enum ConnectionError {
+  E_NO_ERROR            = 0x00,
+  E_CONNECTION_TYPE     = 0x22,
+  E_CONNECTION_OPTION   = 0x23,
+  E_NO_MORE_CONNECTIONS = 0x24,
+  E_TUNNELLING_LAYER    = 0x29
+} ConnectionError;
 
 typedef enum KNXServiceType {
   ST_NO_TYPE                      = 0x0000,
@@ -42,6 +86,10 @@ typedef enum KNXServiceType {
   ST_ROUTING_BUSY                 = 0x0532
 } KNXServiceType;
 
+#pragma endregion Definitions
+
+#pragma region KNX Buffer Write Subfunctions
+
 uint16_t writeKNXHeaderInBuff(uint8_t *buff, uint16_t *totalLen,
                               KNXServiceType action) {
 
@@ -60,7 +108,7 @@ uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen) {
 
   *(buff + (*totalLen)) = 0x08; //< HPAI struct length
   ++(*totalLen);
-  *(buff + (*totalLen)) = 0x01; //< Host Protocol: IPv4 UDP
+  *(buff + (*totalLen)) = IPV4_UDP; //< Host Protocol
   ++(*totalLen);
   inet_pton(AF_INET, KNX_CTRL_ENDPOINT_IP_ADDR,
             (buff + (*totalLen))); //< Control endpoint IP address
@@ -79,14 +127,14 @@ uint16_t writeDIBDevInfoInBuff(uint8_t *buff, uint16_t *totalLen) {
 
   *(buff + (*totalLen))          = 0x36; //< Structure length
   ++(*totalLen);
-  *(buff + (*totalLen)) = 0x01; //< Description type: Device Information
+  *(buff + (*totalLen)) = DEVICE_INFO; //< Description type: Device Information
   ++(*totalLen);
-  *(buff + (*totalLen)) = 0x02; //< KNX medium: TP1
+  *(buff + (*totalLen)) = TP1; //< KNX medium: TP1
   ++(*totalLen);
-  *(buff + (*totalLen)) = 0x00; //< Device status
+  *(buff + (*totalLen)) = DEVICE_STATUS_PROG_MODE_OFF; //< Device status
   ++(*totalLen);
   *(uint16_t *)(buff + (*totalLen)) =
-      htons(0x1132); //< KNX individual address 1.1.32
+      htons(0x1132); //< KNX individual address 1.1.50
   (*totalLen) += 2;
   *(uint16_t *)(buff + (*totalLen)) =
       0x0000; //< Project installation identifier
@@ -107,7 +155,8 @@ uint16_t writeCRDTunnConnInBuff(uint8_t *buff, uint16_t *totalLen) {
 
   *(buff + (*totalLen)) = 0x04; //< Structure length
   ++(*totalLen);
-  *(buff + (*totalLen)) = 0x04; //< Connection type: Tunneling connection
+  *(buff + (*totalLen)) =
+      FAMILY_TUNNELING; //< Connection type: Tunneling connection
   ++(*totalLen);
   *(uint16_t *)(buff + (*totalLen)) =
       htons(0x11FA); //< KNX tunnel individual address 1.1.250
@@ -120,17 +169,24 @@ uint16_t writeDIBSSInBuff(uint8_t *buff, uint16_t *totalLen) {
 
   *(buff + (*totalLen)) = 0x06; //< Structure length
   ++(*totalLen);
-  *(buff + (*totalLen)) = 0x02; //< Description type: Supported service family
+  *(buff + (*totalLen)) =
+      SUPP_SVC_FAMILIES; //< Description type: Supported service family
   ++(*totalLen);
-  *(uint16_t *)(buff + (*totalLen)) = htons(0x0202); //< KNXnet/IP Core v2
+  *(uint16_t *)(buff + (*totalLen)) =
+      htons(MAKEWORD(FAMILY_CORE, 0x02)); //< KNXnet/IP Core v2
   (*totalLen) += 2;
   //  *(uint16_t *)(buff + (*totalLen)) =
   //      htons(0x0302); //< KNXnet/IP Device Management v2
   //  (*totalLen) += 2;
-  *(uint16_t *)(buff + (*totalLen)) = htons(0x0402); //< KNXnet/IP Tunneling v2
+  *(uint16_t *)(buff + (*totalLen)) =
+      htons(MAKEWORD(FAMILY_TUNNELING, 0x02)); //< KNXnet/IP Tunneling v2
   (*totalLen) += 2;
   return (*totalLen);
 }
+
+#pragma endregion KNX Buffer Write Subfunctions
+
+#pragma region KNX Buffer Write Function
 
 uint16_t writeInBuff(uint8_t *buff, KNXServiceType action) {
 
@@ -201,6 +257,10 @@ uint16_t writeInBuff(uint8_t *buff, KNXServiceType action) {
   return totalLen;
 }
 
+#pragma endregion KNX Buffer Write Function
+
+#pragma region Socket Functions
+
 void initSocket(WSADATA *wsaData, SOCKET *serverSocket) {
 
   int wsaStartupResult = WSAStartup(0x22, wsaData);
@@ -244,7 +304,12 @@ void joinMulticastGroup(SOCKET serverSocket, IP_MREQ *mreq) {
   }
 }
 
+#pragma endregion Socket Functions
+
 int main(void) {
+
+#pragma region Communication Preparation
+
   WSADATA wsaData;
   SOCKET serverSocket;
   IP_MREQ mreq;
@@ -267,6 +332,10 @@ int main(void) {
   int recvLen           = 0;
   CommType commType     = COM_RECEIVING;
   KNXServiceType action = ST_NO_TYPE;
+
+#pragma endregion Communication Preparation
+
+#pragma region Communication State Machine
 
   /* Communication State Machine */
   while (TRUE) {
@@ -399,6 +468,8 @@ int main(void) {
     } break;
     }
   }
+
+#pragma endregion Communication State Machine
 
   return EXIT_SUCCESS;
 }

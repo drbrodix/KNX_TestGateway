@@ -8,12 +8,15 @@ in the KNX Standard. The program initialises a KNXnet/IP server running in a Win
 
 Winsock2 library is used to manage network sockets. UDP/IP is used for communication.
 
-Support of basic services are planned:
+Support of the following basic KNXnet/IP services are planned:
 
-- Search
-- Self-Description
-- Connect
-- Disconnect
-- Connection State
-- Search Extended
+- Core
+    - Search
+    - Search Extended
+    - Self-Description
+    - Connect
+    - Disconnect
+    - Connection State
 - Tunneling
+    - Tunneling
+    - Tunneling Feature
