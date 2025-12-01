@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/* Index in list will be used as Channel ID */
+KNXnetIPServerHandle serverList[5];
+uint8_t nrOfServers = 0;
+
 #pragma region KNX Buffer Write Subfunctions
 
 uint16_t writeKNXHeaderInBuff(uint8_t *buff, uint16_t *totalLen,
@@ -255,6 +259,35 @@ void joinMulticastGroup(SOCKET serverSocket, IP_MREQ *mreq) {
   }
 }
 
+#pragma endregion Socket Functions
+
+KNXnetIPServerHandle KNXnetIPServerFactory(char *ctrlIP, char *dataIP,
+                                           uint16_t serverIndivAddr,
+                                           uint16_t tunnelIndivAddr) {
+
+  KNXnetIPServerHandle newKNXServer = malloc(sizeof(KNXnetIPServer));
+  ZeroMemory(newKNXServer, sizeof(KNXnetIPServer));
+
+  if (!inet_pton(AF_INET, ctrlIP, &newKNXServer->ctrlIP))
+    return NULL;
+
+  if (!inet_pton(AF_INET, dataIP, &newKNXServer->dataIP))
+    return NULL;
+
+  newKNXServer->serverIndivAddr = serverIndivAddr;
+  newKNXServer->tunnelIndivAddr = tunnelIndivAddr;
+
+  ++nrOfServers;
+
+  return newKNXServer;
+}
+
+void KNXnetIPServerDelete(KNXnetIPServerHandle *server) {
+  free(server);
+  server = NULL;
+  --nrOfServers;
+}
+
 void KNXnetIPCommStateMachine(SOCKET serverSocket, SOCKADDR_IN *serverAddr,
                               SOCKADDR_IN *clientAddr) {
 
@@ -404,5 +437,3 @@ void KNXnetIPCommStateMachine(SOCKET serverSocket, SOCKADDR_IN *serverAddr,
     }
   }
 }
-
-#pragma endregion Socket Functions

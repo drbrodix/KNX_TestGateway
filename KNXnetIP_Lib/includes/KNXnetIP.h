@@ -88,6 +88,17 @@ typedef enum KNXServiceType {
   ST_ROUTING_BUSY                 = 0x0532
 } KNXServiceType;
 
+typedef struct KNXnetIPServer {
+  uint32_t ctrlIP;
+  uint32_t dataIP;
+  uint32_t seqNr;
+  uint16_t serverIndivAddr;
+  uint16_t tunnelIndivAddr;
+  KNXServiceType action;
+} KNXnetIPServer;
+
+typedef KNXnetIPServer *KNXnetIPServerHandle;
+
 #pragma endregion Definitions
 
 #pragma region Function Declarations
