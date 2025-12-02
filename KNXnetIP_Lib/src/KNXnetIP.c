@@ -2,9 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Index in list will be used as Channel ID */
-KNXnetIPServerHandle serverList[5];
-uint8_t nrOfServers = 0;
+///* Index in list will be used as Channel ID */
+// KNXnetIPServerHandle serverList[MAX_NR_OF_SERVERS];
+// uint8_t nrOfServers = 0;
+
+KNXnetIPServer server;
 
 #pragma region KNX Buffer Write Subfunctions
 
@@ -22,17 +24,15 @@ uint16_t writeKNXHeaderInBuff(uint8_t *buff, uint16_t *totalLen,
   return (*totalLen);
 }
 
-uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen) {
+uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen, uint32_t ip) {
 
   *(buff + (*totalLen)) = 0x08; //< HPAI struct length
   ++(*totalLen);
   *(buff + (*totalLen)) = IPV4_UDP; //< Host Protocol
   ++(*totalLen);
-  inet_pton(AF_INET, KNX_CTRL_ENDPOINT_IP_ADDR,
-            (buff + (*totalLen))); //< Control endpoint IP address
+  *(buff + (*totalLen)) = htonl(ip);
   (*totalLen) += 4;
-  *(uint16_t *)(buff + (*totalLen)) =
-      htons(KNX_PORT); //< Control endpoint port number
+  *(uint16_t *)(buff + (*totalLen)) = htons(KNX_PORT); //< Endpoint port number
   (*totalLen) += 2;
   return (*totalLen);
 }
@@ -43,7 +43,7 @@ uint16_t writeDIBDevInfoInBuff(uint8_t *buff, uint16_t *totalLen) {
   const uint8_t MacAddr[6]       = {0x00, 0x72, 0x11, 0x37, 0x28, 0x42};
   const uint8_t friendlyName[30] = "KNX IP DoggoDevice";
 
-  *(buff + (*totalLen))          = 0x36; //< Structure length
+  *(buff + (*totalLen)) = 0x36; //< Structure length
   ++(*totalLen);
   *(buff + (*totalLen)) = DEVICE_INFO; //< Description type: Device Information
   ++(*totalLen);
@@ -52,15 +52,14 @@ uint16_t writeDIBDevInfoInBuff(uint8_t *buff, uint16_t *totalLen) {
   *(buff + (*totalLen)) = DEVICE_STATUS_PROG_MODE_OFF; //< Device status
   ++(*totalLen);
   *(uint16_t *)(buff + (*totalLen)) =
-      htons(0x1132); //< KNX individual address 1.1.50
+      htons(KNX_DEFAULT_ROUTER_ADDR); //< KNX individual address 1.1.50
   (*totalLen) += 2;
   *(uint16_t *)(buff + (*totalLen)) =
       0x0000; //< Project installation identifier
   (*totalLen) += 2;
   memcpy((buff + (*totalLen)), KNXSerialNum, 6); //< KNX Serial Number
   (*totalLen) += 6;
-  inet_pton(AF_INET, KNX_MULTICAST_ADDR,
-            (buff + (*totalLen))); //< Control endpoint IP address
+  *(buff + (*totalLen)) = htonl(server.ctrlIP); //< Control endpoint IP address
   (*totalLen) += 4;
   memcpy((buff + (*totalLen)), MacAddr, 6); //< MAC address
   (*totalLen) += 6;
@@ -106,7 +105,7 @@ uint16_t writeKNXConnHeaderInBuff(uint8_t *buff, uint16_t *totalLen) {
 
   *(buff + (*totalLen)) = 0x04; //< Structure length
   ++(*totalLen);
-  *(buff + (*totalLen)) = 0x01; //< Channel ID
+  *(buff + (*totalLen)) = server.channelID; //< Channel ID
   ++totalLen;
   *(uint16_t *)(buff + (*totalLen)) =
       MAKEWORD(FAMILY_CORE, 0x02); //< KNXnet/IP Core v2
@@ -122,9 +121,9 @@ uint16_t writeKNXConnHeaderInBuff(uint8_t *buff, uint16_t *totalLen) {
 
 #pragma endregion KNX Buffer Write Subfunctions
 
-#pragma region KNX Buffer Write Function
+#pragma region KNX Action Handler
 
-uint16_t writeInBuff(uint8_t *buff, KNXServiceType action, char *logStrBuff) {
+uint16_t handleAction(uint8_t *buff, KNXServiceType action, char *logStrBuff) {
 
   uint16_t totalLen         = 0;
   const uint8_t totalLenInd = 4;
@@ -142,7 +141,7 @@ uint16_t writeInBuff(uint8_t *buff, KNXServiceType action, char *logStrBuff) {
   case ST_SEARCH_RESPONSE_EXTENDED:
 
     /* HPAI Control Endpoint */
-    writeHPAIInBuff(buff, &totalLen);
+    writeHPAIInBuff(buff, &totalLen, server.ctrlIP);
 
     /* DIB DevInfo */
     writeDIBDevInfoInBuff(buff, &totalLen);
@@ -168,12 +167,12 @@ uint16_t writeInBuff(uint8_t *buff, KNXServiceType action, char *logStrBuff) {
 
   case ST_CONNECT_RESPONSE:
 
-    *(buff + totalLen) = 0x01; //< Channel ID
+    *(buff + totalLen) = server.channelID; //< Channel ID
     ++totalLen;
     *(buff + totalLen) = 0x00; //< Status code
     ++totalLen;
 
-    writeHPAIInBuff(buff, &totalLen);
+    writeHPAIInBuff(buff, &totalLen, server.ctrlIP);
     writeCRDTunnConnInBuff(buff, &totalLen);
 
     strcpy_s(logStrBuff, LOG_STR_BUFF_LEN, "Connect Response");
@@ -188,7 +187,7 @@ uint16_t writeInBuff(uint8_t *buff, KNXServiceType action, char *logStrBuff) {
      * Communication Channel ID.
      * Always 1, because we won't support more channels for now.
      */
-    *(buff + totalLen) = 0x01;
+    *(buff + totalLen) = server.channelID;
     ++totalLen;
     *(buff + totalLen) = E_NO_ERROR; //< Status code
     ++totalLen;
@@ -261,43 +260,68 @@ void joinMulticastGroup(SOCKET serverSocket, IP_MREQ *mreq) {
 
 #pragma endregion Socket Functions
 
-KNXnetIPServerHandle KNXnetIPServerFactory(char *ctrlIP, char *dataIP,
-                                           uint16_t serverIndivAddr,
-                                           uint16_t tunnelIndivAddr) {
+/*
+ * Might use these functions again if multiple Service Containers
+ * and multiple communication channels need to be supported.
+ */
+// KNXnetIPServerHandle KNXnetIPServerFactory(char *ctrlIP, char *dataIP,
+//                                            uint16_t serverIndivAddr,
+//                                            uint16_t tunnelIndivAddr) {
+//
+//   KNXnetIPServerHandle newKNXServer = malloc(sizeof(KNXnetIPServer));
+//   ZeroMemory(newKNXServer, sizeof(KNXnetIPServer));
+//
+//   if (!inet_pton(AF_INET, ctrlIP, &newKNXServer->ctrlIP))
+//     return NULL;
+//
+//   if (!inet_pton(AF_INET, dataIP, &newKNXServer->dataIP))
+//     return NULL;
+//
+//   newKNXServer->serverIndivAddr = serverIndivAddr;
+//   newKNXServer->tunnelIndivAddr = tunnelIndivAddr;
+//
+//   ++nrOfServers;
+//
+//   return newKNXServer;
+// }
+//
+// void KNXnetIPServerDelete(KNXnetIPServerHandle server) {
+//   free(server);
+//   server = NULL;
+//   --nrOfServers;
+// }
+//
+// void KNXnetIPAllServerDelete() {
+//   for (uint8_t i = 0; i < MAX_NR_OF_SERVERS; ++i) {
+//     if (serverList[i])
+//       KNXnetIPServerDelete(serverList[i]);
+//   }
+// }
 
-  KNXnetIPServerHandle newKNXServer = malloc(sizeof(KNXnetIPServer));
-  ZeroMemory(newKNXServer, sizeof(KNXnetIPServer));
-
-  if (!inet_pton(AF_INET, ctrlIP, &newKNXServer->ctrlIP))
-    return NULL;
-
-  if (!inet_pton(AF_INET, dataIP, &newKNXServer->dataIP))
-    return NULL;
-
-  newKNXServer->serverIndivAddr = serverIndivAddr;
-  newKNXServer->tunnelIndivAddr = tunnelIndivAddr;
-
-  ++nrOfServers;
-
-  return newKNXServer;
-}
-
-void KNXnetIPServerDelete(KNXnetIPServerHandle *server) {
-  free(server);
-  server = NULL;
-  --nrOfServers;
-}
+#pragma region Communication State Machine
 
 void KNXnetIPCommStateMachine(SOCKET serverSocket, SOCKADDR_IN *serverAddr,
                               SOCKADDR_IN *clientAddr) {
 
-  /* Vars for bidirectional communication state machine */
+#pragma region Setup Vars for bidirectional Communication
+
   uint8_t rxBuff[BUFF_LEN];
   uint8_t txBuff[BUFF_LEN];
   int clientAddrLen     = sizeof(SOCKADDR_IN);
   int recvLen           = 0;
   CommType commType     = COM_RECEIVING;
   KNXServiceType action = ST_NO_TYPE;
+
+#pragma endregion Setup Vars for bidirectional Communication
+
+#pragma region Initialise Server Structure
+
+  ZeroMemory(&server, sizeof(KNXnetIPServer));
+  server.serverIndivAddr = KNX_DEFAULT_ROUTER_ADDR;
+  inet_pton(AF_INET, KNX_ENDPOINT_IP_ADDR, &server.ctrlIP);
+  inet_pton(AF_INET, KNX_ENDPOINT_IP_ADDR, &server.dataIP);
+
+#pragma endregion Initialise Server Structure
 
   while (TRUE) {
 
@@ -359,11 +383,41 @@ void KNXnetIPCommStateMachine(SOCKET serverSocket, SOCKADDR_IN *serverAddr,
           strcpy_s(srvcStr, 64, "Description Request");
           break;
 
-        case ST_CONNECT_REQUEST:
-          commType = COM_SENDING;
-          action   = ST_CONNECT_RESPONSE;
+        case ST_CONNECT_REQUEST: {
+          /*
+           * Need to check what type of connection Client wants to establish,
+           * on which layer, and whether a specific tunnel address is provided.
+           * For now, only Tunneling is supported, and only on LinkLayer.
+           */
+
+          /* Use first byte of header to skip to CtrlHPAI */
+          uint8_t i = rxBuff[0];
+          /* Use first byte of CtrlHPAI to skip to DataHPAI */
+          i += rxBuff[i];
+          /* Use first byte of DataHPAI to skip to Connection Request Info */
+          i += rxBuff[i];
+
+          if (rxBuff[i + 1] == FAMILY_TUNNELING &&
+              rxBuff[i + 2] == TUNNEL_LINKLAYER) {
+            /* A CRI structure of length greater than 4 suggests
+             * it's an extended CRI with an individual address
+             * provided by the client for the tunnel as the last element.
+             * In this case, we use that address for the tunnel,
+             * otherwise we assign a default address 1.1.250. */
+            server.tunnelIndivAddr =
+                rxBuff[i] > 4 ? htons(*(((uint16_t *)rxBuff + i + 4)))
+                              : KNX_DEFAULT_TUNNEL_ADDR;
+
+            //            /* Build new server entity and store it in server list
+            //            */ currentServer = KNXnetIPServerFactory(
+            //                KNX_ENDPOINT_IP_ADDR, KNX_ENDPOINT_IP_ADDR,
+            //                KNX_DEFAULT_ROUTER_ADDR, tunnelAddr);
+
+            commType = COM_SENDING;
+            action   = ST_CONNECT_RESPONSE;
+          }
           strcpy_s(srvcStr, 64, "Connect Request");
-          break;
+        } break;
 
         case ST_CONNECTIONSTATE_REQUEST:
           commType = COM_SENDING;
@@ -412,8 +466,7 @@ void KNXnetIPCommStateMachine(SOCKET serverSocket, SOCKADDR_IN *serverAddr,
 
     case COM_SENDING: {
       char srvcStr[64];
-
-      const uint16_t buffLen = writeInBuff(txBuff, action, srvcStr);
+      const uint16_t buffLen = handleAction(txBuff, action, srvcStr);
 
       if (sendto(serverSocket, (const char *)txBuff, buffLen, 0,
                  (const struct sockaddr *)clientAddr,
@@ -437,3 +490,5 @@ void KNXnetIPCommStateMachine(SOCKET serverSocket, SOCKADDR_IN *serverAddr,
     }
   }
 }
+
+#pragma endregion Communication State Machine

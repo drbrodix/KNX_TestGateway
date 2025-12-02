@@ -6,11 +6,14 @@
 
 #pragma region Definitions
 
-#define LOG_STR_BUFF_LEN          64
-#define BUFF_LEN                  128
-#define KNX_PORT                  3671
-#define KNX_MULTICAST_ADDR        "224.0.23.12"
-#define KNX_CTRL_ENDPOINT_IP_ADDR "10.56.2.124"
+#define LOG_STR_BUFF_LEN        64
+#define BUFF_LEN                128
+#define KNX_PORT                3671
+#define KNX_MULTICAST_ADDR      "224.0.23.12"
+#define KNX_ENDPOINT_IP_ADDR    "10.56.2.124"
+#define KNX_DEFAULT_ROUTER_ADDR 0xFF00
+#define KNX_DEFAULT_TUNNEL_ADDR 0x11FA
+// #define MAX_NR_OF_SERVERS       5
 
 typedef enum CommType { COM_RECEIVING, COM_SENDING } CommType;
 
@@ -89,15 +92,15 @@ typedef enum KNXServiceType {
 } KNXServiceType;
 
 typedef struct KNXnetIPServer {
+  uint8_t channelID;
   uint32_t ctrlIP;
   uint32_t dataIP;
   uint32_t seqNr;
   uint16_t serverIndivAddr;
   uint16_t tunnelIndivAddr;
-  KNXServiceType action;
 } KNXnetIPServer;
 
-typedef KNXnetIPServer *KNXnetIPServerHandle;
+// typedef KNXnetIPServer *KNXnetIPServerHandle;
 
 #pragma endregion Definitions
 
@@ -105,16 +108,21 @@ typedef KNXnetIPServer *KNXnetIPServerHandle;
 
 uint16_t writeKNXHeaderInBuff(uint8_t *buff, uint16_t *totalLen,
                               KNXServiceType action);
-uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen);
+uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen, uint32_t ip);
 uint16_t writeDIBDevInfoInBuff(uint8_t *buff, uint16_t *totalLen);
 uint16_t writeCRDTunnConnInBuff(uint8_t *buff, uint16_t *totalLen);
 uint16_t writeDIBSSInBuff(uint8_t *buff, uint16_t *totalLen);
 uint16_t writeKNXConnHeaderInBuff(uint8_t *buff, uint16_t *totalLen);
-uint16_t writeInBuff(uint8_t *buff, KNXServiceType action, char *logStrBuff);
+uint16_t handleAction(uint8_t *buff, KNXServiceType action, char *logStrBuff);
 
 void initSocket(WSADATA *wsaData, SOCKET *serverSocket);
 void bindSocket(SOCKET serverSocket, SOCKADDR_IN *serverAddr);
 void joinMulticastGroup(SOCKET serverSocket, IP_MREQ *mreq);
+
+// KNXnetIPServerHandle KNXnetIPServerFactory(char *ctrlIP, char *dataIP,
+//                                            uint16_t serverIndivAddr,
+//                                            uint16_t tunnelIndivAddr);
+// void KNXnetIPServerDelete(KNXnetIPServerHandle server);
 
 void KNXnetIPCommStateMachine(SOCKET serverSocket, SOCKADDR_IN *serverAddr,
                               SOCKADDR_IN *clientAddr);
