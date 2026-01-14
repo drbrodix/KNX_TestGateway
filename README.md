@@ -8,15 +8,24 @@ in the KNX Standard. The program initialises a KNXnet/IP server running in a Win
 
 Winsock2 library is used to manage network sockets. UDP/IP is used for communication.
 
-Support of the following basic KNXnet/IP services are planned:
+This is a standard C99 project, which uses the CMake 4.0 build system.
+The KNXnet/IP Server is built as an Object Library, which can be imported in, and linked against an executable.
 
-- Core
-    - Search
-    - Search Extended
-    - Self-Description
-    - Connect
-    - Disconnect
-    - Connection State
-- Tunneling
-    - Tunneling
-    - Tunneling Feature
+There is already a main routine set up in the repo, which is as simple as:
+
+    #include "KNXnetIP.h"
+    #include <stdio.h>
+    
+    int main(void) {
+    
+        /* Initialise socket and server entity */
+        initServer();
+        /* Start blocking communication state machine */
+        KNXnetIPCommStateMachine();
+        
+        return EXIT_SUCCESS;
+    }
+
+As it is mentioned in the code comment, the KNXnet/IP Server is currently actively blocking.
+I might change it into an asynchronous state machine later on,
+but it doesn't really matter for this project, so I'll probably just leave it as is.
