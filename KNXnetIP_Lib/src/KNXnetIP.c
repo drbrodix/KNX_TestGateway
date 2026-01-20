@@ -24,63 +24,54 @@ InterfaceFeatureSet interfaceFeatures = {
 uint16_t writeKNXHeaderInBuff(uint8_t *buff, uint16_t *totalLen,
                               KNXServiceType action) {
 
-  *buff = 0x06; //< Header length
-  ++(*totalLen);
-  *(buff + (*totalLen)) = 0x10; //< Protocol version 1.0
-  ++(*totalLen);
-  *(uint16_t *)(buff + (*totalLen)) = htons(action); //< Service identifier
-  (*totalLen) += 2;
+  KNXnetIPHeader header;
+  header.headerLength                = sizeof(KNXnetIPHeader);
+  header.protoVersion                = 0x10;
+  header.U_ServiceCode.W_ServiceCode = htons(action);
   /* Total length will be filled later on */
-  (*totalLen) += 2;
+  memcpy((buff + *totalLen), &header, sizeof(KNXnetIPHeader));
+  *totalLen += header.headerLength;
+
   return (*totalLen);
 }
 
-uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen) {
+uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen, SOCKADDR_IN *addr) {
 
-  *(buff + (*totalLen)) = 0x08; //< HPAI struct length
-  ++(*totalLen);
-  *(buff + (*totalLen)) = IPV4_UDP; //< Host Protocol
-  ++(*totalLen);
-  *(uint32_t *)(buff + (*totalLen)) = server.serverAddr.sin_addr.S_un.S_addr;
-  (*totalLen) += 4;
-  *(uint16_t *)(buff + (*totalLen)) =
-      server.serverAddr.sin_port; //< Endpoint port number
-  (*totalLen) += 2;
+  Hpai hpai;
+  hpai.structLength     = sizeof(Hpai);
+  hpai.hostProtoCode    = HP_IPV4_UDP;
+  hpai.ipAddr.DW_ipAddr = addr->sin_addr.S_un.S_addr;
+  hpai.port.W_port      = addr->sin_port;
+  memcpy((buff + *totalLen), &hpai, sizeof(Hpai));
+  *totalLen += hpai.structLength;
+
   return (*totalLen);
 }
 
 uint16_t writeDIBInBuff(uint8_t *buff, uint16_t *totalLen,
                         DibWriteList dibWriteList) {
+
   if (dibWriteList.deviceInfo) {
-    const uint8_t KNXSerialNum[6]  = {0x00, 0xc1, 0x77, 0x13, 0x52, 0x69};
-    const uint8_t MacAddr[6]       = {0x00, 0x72, 0x11, 0x37, 0x28, 0x42};
+    const uint8_t knxSerialNum[6]  = {0x00, 0xc1, 0x77, 0x13, 0x52, 0x69};
+    const uint8_t macAddr[6]       = {0x00, 0x72, 0x11, 0x37, 0x28, 0x42};
     const uint8_t friendlyName[30] = "KNX IP DoggoDevice";
 
-    *(buff + (*totalLen)) = 0x36; //< Structure length
-    ++(*totalLen);
-    *(buff + (*totalLen)) =
-        DIB_DEVICE_INFO; //< Description type: Device Information
-    ++(*totalLen);
-    *(buff + (*totalLen)) = MED_TP1; //< KNX medium: TP1
-    ++(*totalLen);
-    *(buff + (*totalLen)) = DEVICE_STATUS_PROG_MODE_OFF; //< Device status
-    ++(*totalLen);
-    *(uint16_t *)(buff + (*totalLen)) =
-        htons(KNX_DEFAULT_ROUTER_ADDR); //< KNX individual address 1.1.50
-    (*totalLen) += 2;
-    *(uint16_t *)(buff + (*totalLen)) =
-        0x0000; //< Project installation identifier
-    (*totalLen) += 2;
-    memcpy((buff + (*totalLen)), KNXSerialNum, 6); //< KNX Serial Number
-    (*totalLen) += 6;
-    *(uint32_t *)(buff + (*totalLen)) =
-        server.serverAddr.sin_addr.S_un.S_addr; //< Control endpoint IP address
-    (*totalLen) += 4;
-    memcpy((buff + (*totalLen)), MacAddr, 6); //< MAC address
-    (*totalLen) += 6;
-    memcpy((buff + (*totalLen)), friendlyName, 30); //< Friendly name
-    (*totalLen) += 30;
+    Dib_DeviceInformation dib;
+    dib.structLength     = sizeof(Dib_DeviceInformation);
+    dib.dibTypeCode      = DIB_DEVICE_INFO;
+    dib.knxMedium        = MED_TP1;
+    dib.deviceStatus     = DEV_STAT_PROG_MODE_OFF;
+    dib.knxIndivAddr     = htons(KNX_DEFAULT_ROUTER_ADDR);
+    dib.projInstallIdent = 0x0000;
+    memcpy(dib.knxDevSerialNum, knxSerialNum, 6);
+    inet_pton(AF_INET, KNX_MULTICAST_ADDR, &(dib.knxDevRoutingMulticastAddr));
+    memcpy(dib.knxDevMacAddr, macAddr, 6);
+    memcpy(dib.knxDevFriendlyName, friendlyName, 30);
+
+    memcpy(buff + *totalLen, &dib, sizeof(Dib_DeviceInformation));
+    *totalLen += dib.structLength;
   }
+
   if (dibWriteList.suppSvcFamilies) {
     *(buff + (*totalLen)) = 0x08; //< Structure length
     ++(*totalLen);
@@ -97,14 +88,18 @@ uint16_t writeDIBInBuff(uint8_t *buff, uint16_t *totalLen,
         MAKEWORD(FAMILY_TUNNELLING, 0x02); //< KNXnet/IP Tunneling v2
     (*totalLen) += 2;
   }
+
   if (dibWriteList.ipConfig) {
   }
+
   if (dibWriteList.ipCurConfig) {
   }
   if (dibWriteList.knxAddresses) {
   }
+
   if (dibWriteList.mfrData) {
   }
+
   if (dibWriteList.tunnInfo) {
     *(buff + (*totalLen)) = 0x08; //< Structure length
     ++(*totalLen);
@@ -120,6 +115,7 @@ uint16_t writeDIBInBuff(uint8_t *buff, uint16_t *totalLen,
     *(uint16_t *)(buff + (*totalLen)) = htons((0xFFFE) | !(server.isConnected));
     (*totalLen) += 2;
   }
+
   if (dibWriteList.extDvcInfo) {
   }
 
@@ -140,27 +136,9 @@ uint16_t writeCRDTunnConnInBuff(uint8_t *buff, uint16_t *totalLen) {
   return (*totalLen);
 }
 
-uint16_t writeKNXConnHeaderInBuff(uint8_t *buff, uint16_t *totalLen) {
-
-  *(buff + (*totalLen)) = 0x04; //< Structure length
-  ++(*totalLen);
-  *(buff + (*totalLen)) = server.channelID; //< Channel ID
-  ++totalLen;
-  *(uint16_t *)(buff + (*totalLen)) =
-      MAKEWORD(FAMILY_CORE, 0x02); //< KNXnet/IP Core v2
-  (*totalLen) += 2;
-  //  *(uint16_t *)(buff + (*totalLen)) =
-  //      htons(0x0302); //< KNXnet/IP Device Management v2
-  //  (*totalLen) += 2;
-  *(uint16_t *)(buff + (*totalLen)) =
-      MAKEWORD(FAMILY_TUNNELLING, 0x02); //< KNXnet/IP Tunneling v2
-  (*totalLen) += 2;
-  return (*totalLen);
-}
-
 #pragma endregion KNX Buffer Write Subfunctions
 
-#pragma region KNX Action Handler
+#pragma region KNX Frame Factory
 
 uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
                          KNXServiceType recvSrvc, char *srvcStr,
@@ -173,28 +151,18 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
 
   uint8_t rxIdx = 0;
 
-  KNXnetIPHeader knxNetIpHeader;
-  knxNetIpHeader.headerLength = *(rxBuff + rxIdx++);
-  knxNetIpHeader.protoVersion = *(rxBuff + rxIdx++);
-  knxNetIpHeader.serviceCode  = ntohs(*(uint16_t *)(rxBuff + rxIdx));
-  rxIdx += 2;
-  knxNetIpHeader.totalLength = ntohs(*(uint16_t *)(rxBuff + rxIdx));
-  rxIdx += 2;
+  KNXnetIPHeader knxNetIpHeader = *(KNXnetIPHeader *)rxBuff;
+  rxIdx += knxNetIpHeader.headerLength;
 
   switch (recvSrvc) {
   case ST_SEARCH_REQUEST: {
 
     /* Discovery HPAI structure */
-    Hpai discoveryHpai;
-    discoveryHpai.structLength  = *(rxBuff + rxIdx++);
-    discoveryHpai.hostProtoCode = *(rxBuff + rxIdx++);
-    discoveryHpai.ipAddr        = ntohl(*(uint32_t *)(rxBuff + rxIdx));
-    rxIdx += 4;
-    discoveryHpai.port = ntohs(*(uint16_t *)(rxBuff + rxIdx));
-    rxIdx += 2;
+    Hpai discoveryHpai = *((Hpai *)(rxBuff + rxIdx));
+    rxIdx += discoveryHpai.structLength;
 
-    clientAddr->sin_addr.S_un.S_addr = htonl(discoveryHpai.ipAddr);
-    clientAddr->sin_port             = htons(discoveryHpai.port);
+    clientAddr->sin_addr.S_un.S_addr = discoveryHpai.ipAddr.DW_ipAddr;
+    clientAddr->sin_port             = discoveryHpai.port.W_port;
 
     /* Response: ST_SEARCH_RESPONSE */
 
@@ -205,7 +173,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     writeKNXHeaderInBuff(txBuff, &totalLen, ST_SEARCH_RESPONSE);
 
     /* HPAI Control Endpoint */
-    writeHPAIInBuff(txBuff, &totalLen);
+    writeHPAIInBuff(txBuff, &totalLen, &server.serverAddr);
 
     /* DIBs DevInfo, SupportedSvcFamilies */
     writeDIBInBuff(txBuff, &totalLen,
@@ -217,16 +185,11 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
   case ST_DESCRIPTION_REQUEST: {
 
     /* Discovery HPAI structure */
-    Hpai controlHpai;
-    controlHpai.structLength  = *(rxBuff + rxIdx++);
-    controlHpai.hostProtoCode = *(rxBuff + rxIdx++);
-    controlHpai.ipAddr        = ntohl(*(uint32_t *)(rxBuff + rxIdx));
-    rxIdx += 4;
-    controlHpai.port = ntohs(*(uint16_t *)(rxBuff + rxIdx));
-    rxIdx += 2;
+    Hpai discoveryHpai = *((Hpai *)(rxBuff + rxIdx));
+    rxIdx += discoveryHpai.structLength;
 
-    clientAddr->sin_addr.S_un.S_addr = htonl(controlHpai.ipAddr);
-    clientAddr->sin_port             = htons(controlHpai.port);
+    clientAddr->sin_addr.S_un.S_addr = discoveryHpai.ipAddr.DW_ipAddr;
+    clientAddr->sin_port             = discoveryHpai.port.W_port;
 
     /* Response: ST_DESCRIPTION_RESPONSE */
 
@@ -238,12 +201,15 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
 
     /* DIBs DevInfo, SupportedSvcFamilies */
     writeDIBInBuff(txBuff, &totalLen,
-                   (DibWriteList){.deviceInfo = TRUE, .suppSvcFamilies = TRUE});
+                   (DibWriteList){.deviceInfo      = TRUE,
+                                  .suppSvcFamilies = TRUE,
+                                  .tunnInfo        = TRUE});
 
     strcpy_s(srvcStr, LOG_STR_BUFF_LEN, "Description Response");
   } break;
 
   case ST_CONNECT_REQUEST:
+
     /* Response: ST_CONNECT_RESPONSE */
 
     /*
@@ -257,7 +223,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     *(txBuff + totalLen) = 0x00; //< Status code
     ++totalLen;
 
-    writeHPAIInBuff(txBuff, &totalLen);
+    writeHPAIInBuff(txBuff, &totalLen, &server.serverAddr);
     writeCRDTunnConnInBuff(txBuff, &totalLen);
 
     strcpy_s(srvcStr, LOG_STR_BUFF_LEN, "Connect Response");
@@ -306,22 +272,13 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     break;
 
   case ST_SEARCH_REQUEST_EXTENDED: {
-    /*
-     * Init index with KNXnet/IP header length.
-     * With that value, we'll practically skip to body.
-     */
 
     /* Discovery HPAI structure */
-    Hpai discoveryHpai;
-    discoveryHpai.structLength  = *(rxBuff + rxIdx++);
-    discoveryHpai.hostProtoCode = *(rxBuff + rxIdx++);
-    discoveryHpai.ipAddr        = ntohl(*(uint32_t *)(rxBuff + rxIdx));
-    rxIdx += 4;
-    discoveryHpai.port = ntohs(*(uint16_t *)(rxBuff + rxIdx));
-    rxIdx += 2;
+    Hpai discoveryHpai = *((Hpai *)(rxBuff + rxIdx));
+    rxIdx += discoveryHpai.structLength;
 
-    clientAddr->sin_addr.S_un.S_addr = htonl(discoveryHpai.ipAddr);
-    clientAddr->sin_port             = htons(discoveryHpai.port);
+    clientAddr->sin_addr.S_un.S_addr = discoveryHpai.ipAddr.DW_ipAddr;
+    clientAddr->sin_port             = discoveryHpai.port.W_port;
 
     /* Response: ST_SEARCH_RESPONSE */
 
@@ -332,7 +289,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     writeKNXHeaderInBuff(txBuff, &totalLen, ST_SEARCH_RESPONSE_EXTENDED);
 
     /* HPAI Control Endpoint */
-    writeHPAIInBuff(txBuff, &totalLen);
+    writeHPAIInBuff(txBuff, &totalLen, &server.serverAddr);
 
     /* DIBs DevInfo, SupportedSvcFamilies */
     writeDIBInBuff(txBuff, &totalLen,
@@ -347,9 +304,9 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
 
     break;
 
-  case ST_TUNNELLING_FEATURE_GET:
+  case ST_TUNNELLING_FEATURE_GET: {
 
-    break;
+  } break;
 
   case ST_TUNNELLING_FEATURE_SET:
 
@@ -365,83 +322,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
   return totalLen;
 }
 
-#pragma endregion KNX Buffer Write Function
-
-void handleSearchRequest(const uint8_t *rxBuff, CommType *commType,
-                         KNXServiceType *action) {
-  *commType = COM_SENDING;
-  *action   = ST_SEARCH_RESPONSE;
-}
-void handleDescriptionRequest(const uint8_t *rxBuff, CommType *commType,
-                              KNXServiceType *action) {
-  *commType = COM_SENDING;
-  *action   = ST_DESCRIPTION_RESPONSE;
-}
-void handleConnectRequest(const uint8_t *rxBuff, CommType *commType,
-                          KNXServiceType *action) {
-  /*
-   * Need to check what type of connection the Client wants to
-   * establish, on which layer, and whether a specific tunnel address is
-   * provided. For now, only Tunnelling is supported, and only on
-   * LinkLayer.
-   */
-
-  /* Use first byte of header to skip to CtrlHPAI */
-  uint8_t i = rxBuff[0];
-  /* Use first byte of CtrlHPAI to skip to DataHPAI */
-  i += rxBuff[i];
-  /* Use first byte of DataHPAI to skip to Connection Request Info */
-  i += rxBuff[i];
-
-  if (rxBuff[i + 1] == FAMILY_TUNNELLING && rxBuff[i + 2] == TUNNEL_LINKLAYER) {
-    /* A CRI structure of length greater than 4 suggests
-     * it's an extended CRI with an individual address
-     * provided by the client for the tunnel as the last element.
-     * In this case, we use that address for the tunnel,
-     * otherwise we assign a default address 1.1.250. */
-    server.tunnelIndivAddr = rxBuff[i] > 4
-                                 ? htons(*(((uint16_t *)rxBuff + i + 4)))
-                                 : KNX_DEFAULT_TUNNEL_ADDR;
-
-    //            /* Build new server entity and store it in server list
-    //            */ currentServer = KNXnetIPServerFactory(
-    //                KNX_ENDPOINT_IP_ADDR, KNX_ENDPOINT_IP_ADDR,
-    //                KNX_DEFAULT_ROUTER_ADDR, tunnelAddr);
-
-    *commType = COM_SENDING;
-    *action   = ST_CONNECT_RESPONSE;
-  }
-}
-void handleConnectionStateRequest(const uint8_t *rxBuff, CommType *commType,
-                                  KNXServiceType *action) {
-  *commType = COM_SENDING;
-  *action   = ST_CONNECTIONSTATE_RESPONSE;
-}
-void handleDisconnectRequest(const uint8_t *rxBuff, CommType *commType,
-                             KNXServiceType *action) {
-  *commType = COM_SENDING;
-  *action   = ST_DISCONNECT_RESPONSE;
-}
-void handleSearchRequestExtended(const uint8_t *rxBuff, CommType *commType,
-                                 KNXServiceType *action) {
-  *commType = COM_SENDING;
-  *action   = ST_SEARCH_RESPONSE_EXTENDED;
-}
-void handleTunnellingRequest(const uint8_t *rxBuff, CommType *commType,
-                             KNXServiceType *action) {
-  *commType = COM_SENDING;
-  *action   = ST_TUNNELLING_ACK;
-}
-void handleTunnellingFeatureGet(const uint8_t *rxBuff, CommType *commType,
-                                KNXServiceType *action) {
-  *commType = COM_SENDING;
-  *action   = ST_TUNNELLING_FEATURE_RESPONSE;
-}
-void handleTunnellingFeatureSet(const uint8_t *rxBuff, CommType *commType,
-                                KNXServiceType *action) {
-  *commType = COM_SENDING;
-  *action   = ST_TUNNELLING_FEATURE_RESPONSE;
-}
+#pragma endregion KNX Frame Factory
 
 #pragma region Socket Functions
 
@@ -461,6 +342,16 @@ void initServer() {
    * Set to a default for now, will be set to Client's wish if provided.
    */
   server.tunnelIndivAddr = KNX_DEFAULT_TUNNEL_ADDR;
+  /* Server's physical Ethernet interface IP address */
+  server.serverAddr.sin_family = AF_INET;
+  server.serverAddr.sin_port   = htons(KNX_PORT);
+  if (!inet_pton(AF_INET, KNX_ENDPOINT_IP_ADDR,
+                 &(server.serverAddr.sin_addr.S_un.S_addr))) {
+    fprintf(stderr,
+            "Configuring Server Ethernet interface address failed\nError: %d",
+            WSAGetLastError());
+    exit(EXIT_FAILURE);
+  }
 }
 
 void initSocket() {
@@ -478,15 +369,12 @@ void initSocket() {
 }
 
 void bindSocket() {
-  server.serverAddr.sin_family = AF_INET;
-  server.serverAddr.sin_port   = htons(KNX_PORT);
-  if (!inet_pton(AF_INET, KNX_ENDPOINT_IP_ADDR,
-                 &(server.serverAddr.sin_addr.S_un.S_addr))) {
-    fprintf(stderr, "Configuring server IP address failed\nError: %d",
-            WSAGetLastError());
-    exit(EXIT_FAILURE);
-  }
-  if (bind(serverSocket, (const struct sockaddr *)&(server.serverAddr),
+  SOCKADDR_IN listenAddr;
+  ZeroMemory(&listenAddr, sizeof(SOCKADDR_IN));
+  listenAddr.sin_family           = AF_INET;
+  listenAddr.sin_port             = htons(KNX_PORT);
+  listenAddr.sin_addr.S_un.S_addr = INADDR_ANY;
+  if (bind(serverSocket, (const struct sockaddr *)&listenAddr,
            sizeof(SOCKADDR_IN)) < 0) {
     fprintf(stderr, "Binding of socket failed\nError: %d", WSAGetLastError());
     exit(EXIT_FAILURE);

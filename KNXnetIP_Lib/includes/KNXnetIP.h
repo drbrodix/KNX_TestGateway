@@ -10,7 +10,7 @@
 #define BUFF_LEN                128
 #define KNX_PORT                3671
 #define KNX_MULTICAST_ADDR      "224.0.23.12"
-#define KNX_ENDPOINT_IP_ADDR    "10.56.2.122"
+#define KNX_ENDPOINT_IP_ADDR    "10.56.2.123"
 #define KNX_DEFAULT_ROUTER_ADDR 0xFF00
 #define KNX_DEFAULT_TUNNEL_ADDR 0x11FA
 #define KNX_MANUFACTURER_CODE   0x4269
@@ -57,11 +57,14 @@ typedef enum KNXMedium {
 } KNXMedium;
 
 typedef enum DeviceStatus {
-  DEVICE_STATUS_PROG_MODE_OFF = 0x00,
-  DEVICE_STATUS_PROG_MODE_ON  = 0x01
+  DEV_STAT_PROG_MODE_OFF = 0x00,
+  DEV_STAT_PROG_MODE_ON  = 0x01
 } DeviceStatus;
 
-typedef enum HostProtocol { IPV4_UDP = 0x01, IPV4_TCP = 0x02 } HostProtocol;
+typedef enum HostProtocol {
+  HP_IPV4_UDP = 0x01,
+  HP_IPV4_TCP = 0x02
+} HostProtocol;
 
 typedef enum TunnellingLayer {
   TUNNEL_LINKLAYER  = 0x02,
@@ -190,7 +193,7 @@ typedef enum KNXServiceType {
   ST_ROUTING_BUSY                 = 0x0532
 } KNXServiceType;
 
-typedef enum __attribute__((packed)) DeviceDescriptorType {
+typedef enum DeviceDescriptorType {
   DDT_BCU_1_SYSTEM_1_0010          = 0x0010,
   DDT_BCU_1_SYSTEM_1_0011          = 0x0011,
   DDT_BCU_1_SYSTEM_1_0012          = 0x0012,
@@ -228,7 +231,7 @@ typedef enum __attribute__((packed)) DeviceDescriptorType {
   DDT_SYSTEM_B_57B0                = 0x57B0
 } DeviceDescriptorType;
 
-typedef enum __attribute__((packed)) InterfaceFeature {
+typedef enum InterfaceFeature {
   IF_SUPPORTED_EMI_TYPE                    = 1,
   IF_DEVICE_DESCRIPTOR_TYPE_0              = 2,
   IF_BUS_CONNECTION_STATUS                 = 3,
@@ -239,7 +242,7 @@ typedef enum __attribute__((packed)) InterfaceFeature {
   IF_INTERFACE_FEATURE_INFO_SERVICE_ENABLE = 8
 } InterfaceFeature;
 
-typedef enum __attribute__((packed)) ActiveEmiType {
+typedef enum ActiveEmiType {
   EMI_EMI1 = 1,
   EMI_EMI2 = 2,
   EMI_CEMI = 3
@@ -274,19 +277,74 @@ typedef struct KNXnetIPServer {
   SOCKADDR_IN clientDataHPAI;
 } KNXnetIPServer;
 
-typedef struct KNXnetIPHeader {
+typedef union U_IpAddr {
+  uint32_t DW_ipAddr;
+  struct {
+    uint8_t ipAddrB1;
+    uint8_t ipAddrB2;
+    uint8_t ipAddrB3;
+    uint8_t ipAddrB4;
+  } S_B_ipAddr;
+} U_IpAddr;
+
+typedef union U_Port {
+  uint16_t W_port;
+  struct {
+    uint8_t portB1;
+    uint8_t portB2;
+  } S_B_port;
+} U_Port;
+
+typedef struct __attribute__((packed)) KNXnetIPHeader {
   uint8_t headerLength;
   uint8_t protoVersion;
-  uint16_t serviceCode;
-  uint16_t totalLength;
+  union {
+    uint16_t W_ServiceCode;
+    struct {
+      uint8_t ServiceCodeB1;
+      uint8_t ServiceCodeB2;
+    } S_B_ServiceCode;
+  } U_ServiceCode;
+  union {
+    uint16_t W_TotalLength;
+    struct {
+      uint8_t TotalLengthB1;
+      uint8_t TotalLengthB2;
+    } S_B_TotalLength;
+  } U_TotalLength;
 } KNXnetIPHeader;
 
-typedef struct Hpai {
+typedef struct __attribute__((packed)) Hpai {
   uint8_t structLength;
   uint8_t hostProtoCode;
-  uint32_t ipAddr;
-  uint16_t port;
+  U_IpAddr ipAddr;
+  U_Port port;
 } Hpai;
+
+typedef struct Cri {
+  uint8_t structLength;
+  uint8_t connTypeCode;
+  uint8_t knxLayer;
+} Cri;
+
+typedef struct __attribute__((packed)) Dib_DeviceInformation {
+  uint8_t structLength;
+  uint8_t dibTypeCode;
+  uint8_t knxMedium;
+  uint8_t deviceStatus;
+  uint16_t knxIndivAddr;
+  uint16_t projInstallIdent;
+  uint8_t knxDevSerialNum[6];
+  uint32_t knxDevRoutingMulticastAddr;
+  uint8_t knxDevMacAddr[6];
+  uint8_t knxDevFriendlyName[30];
+} Dib_DeviceInformation;
+
+typedef struct FeatureGetBody {
+  uint8_t structLength;
+  uint8_t commChannelId;
+  uint8_t knxLayer;
+} FeatureGetBody;
 
 typedef struct DibWriteList {
   uint8_t deviceInfo      : 1;
@@ -299,20 +357,16 @@ typedef struct DibWriteList {
   uint8_t extDvcInfo      : 1;
 } DibWriteList;
 
-// typedef KNXnetIPServer *KNXnetIPServerHandle;
-
 #pragma endregion Definitions
 
 #pragma region Function Declarations
 
 uint16_t writeKNXHeaderInBuff(uint8_t *buff, uint16_t *totalLen,
                               KNXServiceType action);
-uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen);
+uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen, SOCKADDR_IN *addr);
 uint16_t writeDIBInBuff(uint8_t *buff, uint16_t *totalLen,
                         DibWriteList dibWriteList);
-// uint16_t writeDIBDevInfoInBuff(uint8_t *buff, uint16_t *totalLen);
 uint16_t writeCRDTunnConnInBuff(uint8_t *buff, uint16_t *totalLen);
-// uint16_t writeDIBSSInBuff(uint8_t *buff, uint16_t *totalLen);
 uint16_t writeKNXConnHeaderInBuff(uint8_t *buff, uint16_t *totalLen);
 uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
                          KNXServiceType recvSrvc, char *srvcStr,
