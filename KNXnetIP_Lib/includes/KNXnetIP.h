@@ -10,11 +10,11 @@
 #define BUFF_LEN                128
 #define KNX_PORT                3671
 #define KNX_MULTICAST_ADDR      "224.0.23.12"
-#define KNX_ENDPOINT_IP_ADDR    "10.56.2.123"
 #define KNX_DEFAULT_ROUTER_ADDR 0xFF00
 #define KNX_DEFAULT_TUNNEL_ADDR 0x11FA
 #define KNX_MANUFACTURER_CODE   0x4269
 #define MAX_APDU_LENGTH         50
+#define CEMI_BUFF_SIZE          60
 // #define MAX_NR_OF_SERVERS       5
 
 typedef enum CommType { COM_RECEIVING, COM_SENDING } CommType;
@@ -60,6 +60,13 @@ typedef enum DeviceStatus {
   DEV_STAT_PROG_MODE_OFF = 0x00,
   DEV_STAT_PROG_MODE_ON  = 0x01
 } DeviceStatus;
+
+typedef enum SrpType {
+  SRP_SELECT_BY_PROG_MODE = 0x01,
+  SRP_SELECT_BY_MAC_ADDR  = 0x02,
+  SRP_SELECT_BY_SERVICE   = 0x03,
+  SRP_REQUEST_DIBS        = 0x04,
+} SrpType;
 
 typedef enum HostProtocol {
   HP_IPV4_UDP = 0x01,
@@ -267,9 +274,14 @@ typedef struct InterfaceFeatureSet {
 } InterfaceFeatureSet;
 
 typedef struct KNXnetIPServer {
+  DeviceStatus deviceStatus;
+  uint8_t macAddress[6];
+  uint8_t knxSerialNum[6];
+  uint8_t friendlyName[30];
+  uint8_t svcFamilySupport[10];
   BOOLEAN isConnected;
   uint8_t channelID;
-  uint32_t seqNr;
+  uint8_t seqCntr;
   uint16_t serverIndivAddr;
   uint16_t tunnelIndivAddr;
   SOCKADDR_IN serverAddr;
@@ -340,11 +352,12 @@ typedef struct __attribute__((packed)) Dib_DeviceInformation {
   uint8_t knxDevFriendlyName[30];
 } Dib_DeviceInformation;
 
-typedef struct FeatureGetBody {
+typedef struct ConnectionHeader {
   uint8_t structLength;
   uint8_t commChannelId;
-  uint8_t knxLayer;
-} FeatureGetBody;
+  uint8_t seqCounter;
+  uint8_t status;
+} ConnectionHeader;
 
 typedef struct DibWriteList {
   uint8_t deviceInfo      : 1;
@@ -361,9 +374,8 @@ typedef struct DibWriteList {
 
 #pragma region Function Declarations
 
-uint16_t writeKNXHeaderInBuff(uint8_t *buff, uint16_t *totalLen,
-                              KNXServiceType action);
-uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen, SOCKADDR_IN *addr);
+uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen,
+                         const SOCKADDR_IN *addr);
 uint16_t writeDIBInBuff(uint8_t *buff, uint16_t *totalLen,
                         DibWriteList dibWriteList);
 uint16_t writeCRDTunnConnInBuff(uint8_t *buff, uint16_t *totalLen);

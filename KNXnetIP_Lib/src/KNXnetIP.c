@@ -21,21 +21,8 @@ InterfaceFeatureSet interfaceFeatures = {
 
 #pragma region KNX Buffer Write Subfunctions
 
-uint16_t writeKNXHeaderInBuff(uint8_t *buff, uint16_t *totalLen,
-                              KNXServiceType action) {
-
-  KNXnetIPHeader header;
-  header.headerLength                = sizeof(KNXnetIPHeader);
-  header.protoVersion                = 0x10;
-  header.U_ServiceCode.W_ServiceCode = htons(action);
-  /* Total length will be filled later on */
-  memcpy((buff + *totalLen), &header, sizeof(KNXnetIPHeader));
-  *totalLen += header.headerLength;
-
-  return (*totalLen);
-}
-
-uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen, SOCKADDR_IN *addr) {
+uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen,
+                         const SOCKADDR_IN *addr) {
 
   Hpai hpai;
   hpai.structLength     = sizeof(Hpai);
@@ -49,13 +36,9 @@ uint16_t writeHPAIInBuff(uint8_t *buff, uint16_t *totalLen, SOCKADDR_IN *addr) {
 }
 
 uint16_t writeDIBInBuff(uint8_t *buff, uint16_t *totalLen,
-                        DibWriteList dibWriteList) {
+                        const DibWriteList dibWriteList) {
 
   if (dibWriteList.deviceInfo) {
-    const uint8_t knxSerialNum[6]  = {0x00, 0xc1, 0x77, 0x13, 0x52, 0x69};
-    const uint8_t macAddr[6]       = {0x00, 0x72, 0x11, 0x37, 0x28, 0x42};
-    const uint8_t friendlyName[30] = "KNX IP DoggoDevice";
-
     Dib_DeviceInformation dib;
     dib.structLength     = sizeof(Dib_DeviceInformation);
     dib.dibTypeCode      = DIB_DEVICE_INFO;
@@ -63,29 +46,31 @@ uint16_t writeDIBInBuff(uint8_t *buff, uint16_t *totalLen,
     dib.deviceStatus     = DEV_STAT_PROG_MODE_OFF;
     dib.knxIndivAddr     = htons(KNX_DEFAULT_ROUTER_ADDR);
     dib.projInstallIdent = 0x0000;
-    memcpy(dib.knxDevSerialNum, knxSerialNum, 6);
+    memcpy(dib.knxDevSerialNum, server.knxSerialNum, 6);
     inet_pton(AF_INET, KNX_MULTICAST_ADDR, &(dib.knxDevRoutingMulticastAddr));
-    memcpy(dib.knxDevMacAddr, macAddr, 6);
-    memcpy(dib.knxDevFriendlyName, friendlyName, 30);
+    memcpy(dib.knxDevMacAddr, server.macAddress, 6);
+    memcpy(dib.knxDevFriendlyName, server.friendlyName, 30);
 
     memcpy(buff + *totalLen, &dib, sizeof(Dib_DeviceInformation));
     *totalLen += dib.structLength;
   }
 
   if (dibWriteList.suppSvcFamilies) {
-    *(buff + (*totalLen)) = 0x08; //< Structure length
+    *(buff + (*totalLen)) = 10; //< Structure length
     ++(*totalLen);
-    *(buff + (*totalLen)) =
-        DIB_SUPP_SVC_FAMILIES; //< Description type: Supported service family
+    *(buff + (*totalLen)) = DIB_SUPP_SVC_FAMILIES;
     ++(*totalLen);
     *(uint16_t *)(buff + (*totalLen)) =
-        MAKEWORD(FAMILY_CORE, 0x02); //< KNXnet/IP Core v2
+        MAKEWORD(FAMILY_CORE, server.svcFamilySupport[FAMILY_CORE]);
     (*totalLen) += 2;
     *(uint16_t *)(buff + (*totalLen)) =
-        htons(0x0302); //< KNXnet/IP Device Management v2
+        MAKEWORD(FAMILY_DEV_MGMT, server.svcFamilySupport[FAMILY_DEV_MGMT]);
     (*totalLen) += 2;
     *(uint16_t *)(buff + (*totalLen)) =
-        MAKEWORD(FAMILY_TUNNELLING, 0x02); //< KNXnet/IP Tunneling v2
+        MAKEWORD(FAMILY_TUNNELLING, server.svcFamilySupport[FAMILY_TUNNELLING]);
+    (*totalLen) += 2;
+    *(uint16_t *)(buff + (*totalLen)) =
+        MAKEWORD(FAMILY_ROUTING, server.svcFamilySupport[FAMILY_ROUTING]);
     (*totalLen) += 2;
   }
 
@@ -138,27 +123,29 @@ uint16_t writeCRDTunnConnInBuff(uint8_t *buff, uint16_t *totalLen) {
 
 #pragma endregion KNX Buffer Write Subfunctions
 
-#pragma region KNX Frame Factory
+#pragma region KNX Frame Interpreter
 
 uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
-                         KNXServiceType recvSrvc, char *srvcStr,
+                         const KNXServiceType recvSrvc, char *srvcStr,
                          SOCKADDR_IN *clientAddr) {
-
-  uint16_t totalLen         = 0;
-  const uint8_t totalLenInd = 4;
 
   clientAddr->sin_family = AF_INET;
 
-  uint8_t rxIdx = 0;
+  KNXnetIPHeader *rxKnxNetIpHeader = (KNXnetIPHeader *)rxBuff;
+  rxKnxNetIpHeader->headerLength   = sizeof(KNXnetIPHeader);
+  rxKnxNetIpHeader->protoVersion   = 0x10;
+  uint16_t rxIdx                   = rxKnxNetIpHeader->headerLength;
 
-  KNXnetIPHeader knxNetIpHeader = *(KNXnetIPHeader *)rxBuff;
-  rxIdx += knxNetIpHeader.headerLength;
+  KNXnetIPHeader *txKnxNetIpHeader = (KNXnetIPHeader *)txBuff;
+  txKnxNetIpHeader->headerLength   = sizeof(KNXnetIPHeader);
+  txKnxNetIpHeader->protoVersion   = 0x10;
+  uint16_t totalLen                = txKnxNetIpHeader->headerLength;
 
   switch (recvSrvc) {
   case ST_SEARCH_REQUEST: {
 
     /* Discovery HPAI structure */
-    Hpai discoveryHpai = *((Hpai *)(rxBuff + rxIdx));
+    const Hpai discoveryHpai = *((Hpai *)(rxBuff + rxIdx));
     rxIdx += discoveryHpai.structLength;
 
     clientAddr->sin_addr.S_un.S_addr = discoveryHpai.ipAddr.DW_ipAddr;
@@ -170,7 +157,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
      * Common KNXnet/IP Header,
      * which is same in each KNXnet/IP frame
      */
-    writeKNXHeaderInBuff(txBuff, &totalLen, ST_SEARCH_RESPONSE);
+    txKnxNetIpHeader->U_ServiceCode.W_ServiceCode = htons(ST_SEARCH_RESPONSE);
 
     /* HPAI Control Endpoint */
     writeHPAIInBuff(txBuff, &totalLen, &server.serverAddr);
@@ -185,7 +172,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
   case ST_DESCRIPTION_REQUEST: {
 
     /* Discovery HPAI structure */
-    Hpai discoveryHpai = *((Hpai *)(rxBuff + rxIdx));
+    const Hpai discoveryHpai = *((Hpai *)(rxBuff + rxIdx));
     rxIdx += discoveryHpai.structLength;
 
     clientAddr->sin_addr.S_un.S_addr = discoveryHpai.ipAddr.DW_ipAddr;
@@ -197,7 +184,8 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
      * Common KNXnet/IP Header,
      * which is same in each KNXnet/IP frame
      */
-    writeKNXHeaderInBuff(txBuff, &totalLen, ST_DESCRIPTION_RESPONSE);
+    txKnxNetIpHeader->U_ServiceCode.W_ServiceCode =
+        htons(ST_DESCRIPTION_RESPONSE);
 
     /* DIBs DevInfo, SupportedSvcFamilies */
     writeDIBInBuff(txBuff, &totalLen,
@@ -208,7 +196,24 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     strcpy_s(srvcStr, LOG_STR_BUFF_LEN, "Description Response");
   } break;
 
-  case ST_CONNECT_REQUEST:
+  case ST_CONNECT_REQUEST: {
+    /* Control HPAI structure */
+    const Hpai controlHpai = *((Hpai *)(rxBuff + rxIdx));
+    rxIdx += controlHpai.structLength;
+
+    /* Data HPAI structure */
+    const Hpai dataHpai = *((Hpai *)(rxBuff + rxIdx));
+    rxIdx += dataHpai.structLength;
+
+    const Cri cri = *((Cri *)(rxBuff + rxIdx));
+
+    server.clientCtrlHPAI.sin_family           = AF_INET;
+    server.clientCtrlHPAI.sin_addr.S_un.S_addr = controlHpai.ipAddr.DW_ipAddr;
+    server.clientCtrlHPAI.sin_port             = controlHpai.port.W_port;
+
+    server.clientDataHPAI.sin_family           = AF_INET;
+    server.clientDataHPAI.sin_addr.S_un.S_addr = dataHpai.ipAddr.DW_ipAddr;
+    server.clientDataHPAI.sin_port             = dataHpai.port.W_port;
 
     /* Response: ST_CONNECT_RESPONSE */
 
@@ -216,7 +221,10 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
      * Common KNXnet/IP Header,
      * which is same in each KNXnet/IP frame
      */
-    writeKNXHeaderInBuff(txBuff, &totalLen, ST_CONNECT_RESPONSE);
+
+    memcpy(clientAddr, &server.clientCtrlHPAI, sizeof(SOCKADDR_IN));
+
+    txKnxNetIpHeader->U_ServiceCode.W_ServiceCode = htons(ST_CONNECT_RESPONSE);
 
     *(txBuff + totalLen) = server.channelID; //< Channel ID
     ++totalLen;
@@ -226,17 +234,30 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     writeHPAIInBuff(txBuff, &totalLen, &server.serverAddr);
     writeCRDTunnConnInBuff(txBuff, &totalLen);
 
-    strcpy_s(srvcStr, LOG_STR_BUFF_LEN, "Connect Response");
-    break;
+    server.isConnected = TRUE;
 
-  case ST_CONNECTIONSTATE_REQUEST:
+    strcpy_s(srvcStr, LOG_STR_BUFF_LEN, "Connect Response");
+  } break;
+
+  case ST_CONNECTIONSTATE_REQUEST: {
+    if (rxBuff[rxIdx] != server.channelID)
+      return totalLen;
+    rxIdx += 2;
+    /* Control HPAI structure */
+    const Hpai controlHpai = *((Hpai *)(rxBuff + rxIdx));
+    rxIdx += controlHpai.structLength;
+
+    clientAddr->sin_addr.S_un.S_addr = controlHpai.ipAddr.DW_ipAddr;
+    clientAddr->sin_port             = controlHpai.port.W_port;
+
     /* Response: ST_CONNECTIONSTATE_RESPONSE */
 
     /*
      * Common KNXnet/IP Header,
      * which is same in each KNXnet/IP frame
      */
-    writeKNXHeaderInBuff(txBuff, &totalLen, ST_CONNECTIONSTATE_RESPONSE);
+    txKnxNetIpHeader->U_ServiceCode.W_ServiceCode =
+        htons(ST_CONNECTIONSTATE_RESPONSE);
 
     /*
      * Communication Channel ID.
@@ -248,16 +269,27 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     ++totalLen;
 
     strcpy_s(srvcStr, LOG_STR_BUFF_LEN, "Connection State Response");
-    break;
+  } break;
 
-  case ST_DISCONNECT_REQUEST:
+  case ST_DISCONNECT_REQUEST: {
+    if (rxBuff[rxIdx] != server.channelID)
+      return totalLen;
+    rxIdx += 2;
+    /* Control HPAI structure */
+    const Hpai controlHpai = *((Hpai *)(rxBuff + rxIdx));
+    rxIdx += controlHpai.structLength;
+
+    clientAddr->sin_addr.S_un.S_addr = controlHpai.ipAddr.DW_ipAddr;
+    clientAddr->sin_port             = controlHpai.port.W_port;
+
     /* Response: ST_DISCONNECT_RESPONSE */
 
     /*
      * Common KNXnet/IP Header,
      * which is same in each KNXnet/IP frame
      */
-    writeKNXHeaderInBuff(txBuff, &totalLen, ST_DISCONNECT_RESPONSE);
+    txKnxNetIpHeader->U_ServiceCode.W_ServiceCode =
+        htons(ST_DISCONNECT_RESPONSE);
 
     /*
      * Communication Channel ID.
@@ -268,10 +300,22 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     *(txBuff + totalLen) = E_NO_ERROR; //< Status code
     ++totalLen;
 
+    server.isConnected = FALSE;
+    server.seqCntr     = 0;
+    ZeroMemory(&server.clientCtrlHPAI, sizeof(SOCKADDR_IN));
+    ZeroMemory(&server.clientDataHPAI, sizeof(SOCKADDR_IN));
+
     strcpy_s(srvcStr, LOG_STR_BUFF_LEN, "Disconnect Response");
-    break;
+  } break;
 
   case ST_SEARCH_REQUEST_EXTENDED: {
+
+    /*
+     * KNXnetIP Header is 6 bytes long, HPAI is 8 bytes long.
+     * If total length is longer, there must be SRPs in the frame.
+     */
+    const BOOLEAN hasSrp =
+        ntohs(rxKnxNetIpHeader->U_TotalLength.W_TotalLength) > 14;
 
     /* Discovery HPAI structure */
     Hpai discoveryHpai = *((Hpai *)(rxBuff + rxIdx));
@@ -280,13 +324,60 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     clientAddr->sin_addr.S_un.S_addr = discoveryHpai.ipAddr.DW_ipAddr;
     clientAddr->sin_port             = discoveryHpai.port.W_port;
 
+    if (hasSrp) {
+      const uint16_t rxTotalLen =
+          ntohs(rxKnxNetIpHeader->U_TotalLength.W_TotalLength);
+      while (rxIdx < rxTotalLen) {
+        const uint8_t srpLen         = rxBuff[rxIdx++];
+        uint8_t srpType              = rxBuff[rxIdx++];
+        const BOOLEAN isSrpMandatory = srpType & 0x80;
+        srpType &= 0x7F;
+        switch (srpType) {
+
+        case SRP_SELECT_BY_PROG_MODE:
+          if (isSrpMandatory && !server.deviceStatus)
+            return totalLen;
+          break;
+
+        case SRP_SELECT_BY_MAC_ADDR:
+          if (isSrpMandatory && memcmp(rxBuff + rxIdx, &server.macAddress, 6))
+            return totalLen;
+          break;
+
+        case SRP_SELECT_BY_SERVICE: {
+          const uint8_t svcFamilyReq    = rxBuff[rxIdx++];
+          const SrpType svcFamilyVerReq = rxBuff[rxIdx++];
+          if (isSrpMandatory &&
+              server.svcFamilySupport[svcFamilyReq] < svcFamilyVerReq)
+            return totalLen;
+        } break;
+
+        case SRP_REQUEST_DIBS: {
+          const uint8_t nrOfDibReq = srpLen - 2;
+          const uint8_t lastDibIdx = rxIdx + nrOfDibReq;
+          if (isSrpMandatory) {
+            while (rxIdx < lastDibIdx) {
+              if (rxBuff[rxIdx] > FAMILY_ROUTING)
+                return totalLen;
+              rxIdx++;
+            }
+          }
+        } break;
+
+        default:
+          /* Just skip the SRP. -2, because we've already skipped 2 bytes. */
+          rxIdx += (srpLen - 2);
+        }
+      }
+    }
     /* Response: ST_SEARCH_RESPONSE */
 
     /*
      * Common KNXnet/IP Header,
      * which is same in each KNXnet/IP frame
      */
-    writeKNXHeaderInBuff(txBuff, &totalLen, ST_SEARCH_RESPONSE_EXTENDED);
+    txKnxNetIpHeader->U_ServiceCode.W_ServiceCode =
+        htons(ST_SEARCH_RESPONSE_EXTENDED);
 
     /* HPAI Control Endpoint */
     writeHPAIInBuff(txBuff, &totalLen, &server.serverAddr);
@@ -301,28 +392,135 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
   } break;
 
   case ST_TUNNELLING_REQUEST:
+    const ConnectionHeader rxConnHeader = *(ConnectionHeader *)(rxBuff + rxIdx);
+    if (rxConnHeader.commChannelId != server.channelID)
+      return totalLen;
+    rxIdx += rxConnHeader.structLength;
 
+    /* Response: ST_TUNNELLING_ACK */
+
+    /* Common KNXnet/IP Header */
+    txKnxNetIpHeader->U_ServiceCode.W_ServiceCode = htons(ST_TUNNELLING_ACK);
+    /* Connection Header */
+    ConnectionHeader *txConnHeader = (ConnectionHeader *)(txBuff + totalLen);
+    memcpy(txConnHeader, &rxConnHeader, sizeof(ConnectionHeader));
+    totalLen += txConnHeader->structLength;
+    txConnHeader->seqCounter = server.seqCntr++;
+    txConnHeader->status     = E_NO_ERROR;
     break;
 
-  case ST_TUNNELLING_FEATURE_GET: {
+  case ST_TUNNELLING_FEATURE_GET:
+  case ST_TUNNELLING_FEATURE_SET: {
+    const ConnectionHeader rxConnHeader = *(ConnectionHeader *)(rxBuff + rxIdx);
+    if (rxConnHeader.commChannelId != server.channelID)
+      return totalLen;
+
+    rxIdx += rxConnHeader.structLength;
+    InterfaceFeature featureId = rxBuff[rxIdx];
+
+    /* Response: ST_TUNNELLING_FEATURE_RESPONSE */
+
+    /* Common KNXnet/IP Header */
+    txKnxNetIpHeader->U_ServiceCode.W_ServiceCode =
+        htons(ST_TUNNELLING_FEATURE_RESPONSE);
+    /* Connection Header */
+    ConnectionHeader *txConnHeader = (ConnectionHeader *)(txBuff + totalLen);
+    memcpy(txConnHeader, &rxConnHeader, sizeof(ConnectionHeader));
+    totalLen += txConnHeader->structLength;
+    txConnHeader->seqCounter = server.seqCntr++;
+
+    txBuff[totalLen++] = featureId;
+    txBuff[totalLen++] = E_NO_ERROR;
+
+    switch (recvSrvc) {
+    case ST_TUNNELLING_FEATURE_GET:
+      switch (featureId) {
+      case IF_SUPPORTED_EMI_TYPE:
+        *(uint16_t *)(txBuff + totalLen) =
+            htons(*(uint16_t *)&interfaceFeatures.supportedEmiType);
+        totalLen += 2;
+        break;
+      case IF_DEVICE_DESCRIPTOR_TYPE_0:
+        *(uint16_t *)(txBuff + totalLen) =
+            htons(*(uint16_t *)&interfaceFeatures.deviceDescriptorType);
+        totalLen += 2;
+        break;
+      case IF_BUS_CONNECTION_STATUS:
+        *(txBuff + totalLen) = interfaceFeatures.busConnectionStatus;
+        totalLen++;
+        break;
+      case IF_KNX_MANUFACTURER_CODE:
+        *(uint16_t *)(txBuff + totalLen) =
+            htons(*(uint16_t *)&interfaceFeatures.knxManufacturerCode);
+        totalLen += 2;
+        break;
+      case IF_ACTIVE_EMI_TYPE:
+        *(txBuff + totalLen) = interfaceFeatures.activeEmiType;
+        totalLen++;
+        break;
+      case IF_INTERFACE_INDIVIDUAL_ADDRESS:
+        *(uint16_t *)(txBuff + totalLen) =
+            htons(*(uint16_t *)&interfaceFeatures.interfaceIndivAddr);
+        totalLen += 2;
+        break;
+      case IF_MAX_APDU_LENGTH:
+        *(uint16_t *)(txBuff + totalLen) =
+            htons(*(uint16_t *)&interfaceFeatures.maxApduLength);
+        totalLen += 2;
+        break;
+      case IF_INTERFACE_FEATURE_INFO_SERVICE_ENABLE:
+        *(txBuff + totalLen) = interfaceFeatures.interfaceFeatureInfoServEnable;
+        totalLen++;
+        break;
+      default:
+        txBuff[totalLen - 1] = E_ADDRESS_VOID;
+        return totalLen;
+        break;
+      }
+      break;
+    case ST_TUNNELLING_FEATURE_SET:
+      rxIdx += 2;
+      switch (featureId) {
+      case IF_INTERFACE_INDIVIDUAL_ADDRESS:
+        interfaceFeatures.interfaceIndivAddr =
+            ntohs(*(uint16_t *)(rxBuff + rxIdx));
+        memcpy(txBuff + totalLen, rxBuff + rxIdx, 2);
+        totalLen += 2;
+        rxIdx += 2;
+        break;
+
+      case IF_INTERFACE_FEATURE_INFO_SERVICE_ENABLE:
+        interfaceFeatures.interfaceFeatureInfoServEnable = txBuff[totalLen++] =
+            rxBuff[rxIdx++];
+        break;
+
+      default: {
+        if (featureId > IF_INTERFACE_FEATURE_INFO_SERVICE_ENABLE ||
+            featureId < IF_SUPPORTED_EMI_TYPE)
+          txBuff[totalLen - 1] = E_ADDRESS_VOID;
+        else
+          txBuff[totalLen - 1] = E_ACCESS_READ_ONLY;
+      } break;
+      }
+      break;
+    default:
+      return FALSE;
+      break;
+    }
 
   } break;
-
-  case ST_TUNNELLING_FEATURE_SET:
-
-    break;
 
   default:
     return totalLen;
     break;
   }
 
-  *(uint16_t *)(txBuff + totalLenInd) = htons(totalLen);
+  txKnxNetIpHeader->U_TotalLength.W_TotalLength = htons(totalLen);
 
   return totalLen;
 }
 
-#pragma endregion KNX Frame Factory
+#pragma endregion KNX Frame Interpreter
 
 #pragma region Socket Functions
 
@@ -335,6 +533,17 @@ void initServer() {
   bindSocket();
   joinMulticastGroup();
 
+  /* Versions of supported service families */
+  server.svcFamilySupport[FAMILY_CORE]       = 2;
+  server.svcFamilySupport[FAMILY_DEV_MGMT]   = 2;
+  server.svcFamilySupport[FAMILY_TUNNELLING] = 2;
+  server.svcFamilySupport[FAMILY_ROUTING]    = 2;
+  memcpy(server.knxSerialNum, (uint8_t[6]){0x00, 0xc1, 0x77, 0x13, 0x52, 0x69},
+         6);
+  memcpy(server.macAddress, (uint8_t[6]){0x00, 0x72, 0x11, 0x37, 0x28, 0x42},
+         6);
+  memcpy(server.friendlyName, (uint8_t[30]){"KNX IP DoggoDevice"}, 30);
+
   /* Server's own KNX individual address */
   server.serverIndivAddr = KNX_DEFAULT_ROUTER_ADDR;
   /*
@@ -342,16 +551,36 @@ void initServer() {
    * Set to a default for now, will be set to Client's wish if provided.
    */
   server.tunnelIndivAddr = KNX_DEFAULT_TUNNEL_ADDR;
-  /* Server's physical Ethernet interface IP address */
-  server.serverAddr.sin_family = AF_INET;
-  server.serverAddr.sin_port   = htons(KNX_PORT);
-  if (!inet_pton(AF_INET, KNX_ENDPOINT_IP_ADDR,
-                 &(server.serverAddr.sin_addr.S_un.S_addr))) {
-    fprintf(stderr,
-            "Configuring Server Ethernet interface address failed\nError: %d",
+
+  /* Fetch local IPv4 of Ethernet interface */
+#define HOST_NAME_LEN 250
+  char hostName[HOST_NAME_LEN];
+  ZeroMemory(hostName, HOST_NAME_LEN);
+  if (gethostname(hostName, HOST_NAME_LEN)) {
+    fprintf(stderr, "Fetching host name failed\nError: %d", WSAGetLastError());
+    exit(EXIT_FAILURE);
+  }
+
+  ADDRINFO *addrList = NULL;
+  if (getaddrinfo(hostName, NULL, NULL, &addrList)) {
+    fprintf(stderr, "Fetching host name failed\nError: %d", WSAGetLastError());
+    exit(EXIT_FAILURE);
+  }
+  ADDRINFO *sockAddr = addrList;
+  while (sockAddr) {
+    if (sockAddr->ai_family == AF_INET)
+      break;
+    sockAddr = sockAddr->ai_next;
+  }
+  if (!sockAddr) {
+    fprintf(stderr, "Fetching local IPv4 interface address failed\nError: %d",
             WSAGetLastError());
     exit(EXIT_FAILURE);
   }
+  server.serverAddr          = *(SOCKADDR_IN *)sockAddr->ai_addr;
+  server.serverAddr.sin_port = htons(KNX_PORT);
+
+#undef HOST_NAME_LEN
 }
 
 void initSocket() {
