@@ -262,23 +262,22 @@ typedef struct SupportedEMIType {
   uint16_t _padding : 13;
 } SupportedEMIType;
 
-typedef struct InterfaceFeatureSet {
-  SupportedEMIType supportedEmiType;
-  DeviceDescriptorType deviceDescriptorType;
-  BOOLEAN busConnectionStatus;
-  uint16_t knxManufacturerCode;
-  ActiveEmiType activeEmiType;
-  uint16_t interfaceIndivAddr;
-  uint16_t maxApduLength;
-  BOOLEAN interfaceFeatureInfoServEnable;
-} InterfaceFeatureSet;
-
 typedef struct KNXnetIPServer {
   DeviceStatus deviceStatus;
   uint8_t macAddress[6];
   uint8_t knxSerialNum[6];
   uint8_t friendlyName[30];
   uint8_t svcFamilySupport[10];
+  struct {
+    SupportedEMIType supportedEmiType;
+    DeviceDescriptorType deviceDescriptorType;
+    BOOLEAN busConnectionStatus;
+    uint16_t knxManufacturerCode;
+    ActiveEmiType activeEmiType;
+    uint16_t interfaceIndivAddr;
+    uint16_t maxApduLength;
+    BOOLEAN interfaceFeatureInfoServEnable;
+  } InterfaceFeatureSet;
   BOOLEAN isConnected;
   uint8_t channelID;
   uint8_t seqCntr;

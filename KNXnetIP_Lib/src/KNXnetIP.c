@@ -1,6 +1,7 @@
 #include "KNXnetIP.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <windows.h>
 
 ///* Index in list will be used as Channel ID */
 // KNXnetIPServerHandle serverList[MAX_NR_OF_SERVERS];
@@ -9,15 +10,6 @@ WSADATA wsaData;
 SOCKET serverSocket;
 IP_MREQ mreq;
 KNXnetIPServer server;
-InterfaceFeatureSet interfaceFeatures = {
-    .supportedEmiType               = {.cEMI = TRUE},
-    .deviceDescriptorType           = DDT_KNXNET_IP_ROUTER_091A,
-    .busConnectionStatus            = TRUE,
-    .knxManufacturerCode            = KNX_MANUFACTURER_CODE,
-    .activeEmiType                  = EMI_CEMI,
-    .interfaceIndivAddr             = KNX_DEFAULT_TUNNEL_ADDR,
-    .maxApduLength                  = MAX_APDU_LENGTH,
-    .interfaceFeatureInfoServEnable = FALSE};
 
 #pragma region KNX Buffer Write Subfunctions
 
@@ -391,7 +383,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     strcpy_s(srvcStr, LOG_STR_BUFF_LEN, "Search Response Extended");
   } break;
 
-  case ST_TUNNELLING_REQUEST:
+  case ST_TUNNELLING_REQUEST: {
     const ConnectionHeader rxConnHeader = *(ConnectionHeader *)(rxBuff + rxIdx);
     if (rxConnHeader.commChannelId != server.channelID)
       return totalLen;
@@ -407,7 +399,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
     totalLen += txConnHeader->structLength;
     txConnHeader->seqCounter = server.seqCntr++;
     txConnHeader->status     = E_NO_ERROR;
-    break;
+  } break;
 
   case ST_TUNNELLING_FEATURE_GET:
   case ST_TUNNELLING_FEATURE_SET: {
@@ -437,39 +429,40 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
       switch (featureId) {
       case IF_SUPPORTED_EMI_TYPE:
         *(uint16_t *)(txBuff + totalLen) =
-            htons(*(uint16_t *)&interfaceFeatures.supportedEmiType);
+            htons(*(uint16_t *)&server.InterfaceFeatureSet.supportedEmiType);
         totalLen += 2;
         break;
       case IF_DEVICE_DESCRIPTOR_TYPE_0:
-        *(uint16_t *)(txBuff + totalLen) =
-            htons(*(uint16_t *)&interfaceFeatures.deviceDescriptorType);
+        *(uint16_t *)(txBuff + totalLen) = htons(
+            *(uint16_t *)&server.InterfaceFeatureSet.deviceDescriptorType);
         totalLen += 2;
         break;
       case IF_BUS_CONNECTION_STATUS:
-        *(txBuff + totalLen) = interfaceFeatures.busConnectionStatus;
+        *(txBuff + totalLen) = server.InterfaceFeatureSet.busConnectionStatus;
         totalLen++;
         break;
       case IF_KNX_MANUFACTURER_CODE:
         *(uint16_t *)(txBuff + totalLen) =
-            htons(*(uint16_t *)&interfaceFeatures.knxManufacturerCode);
+            htons(*(uint16_t *)&server.InterfaceFeatureSet.knxManufacturerCode);
         totalLen += 2;
         break;
       case IF_ACTIVE_EMI_TYPE:
-        *(txBuff + totalLen) = interfaceFeatures.activeEmiType;
+        *(txBuff + totalLen) = server.InterfaceFeatureSet.activeEmiType;
         totalLen++;
         break;
       case IF_INTERFACE_INDIVIDUAL_ADDRESS:
         *(uint16_t *)(txBuff + totalLen) =
-            htons(*(uint16_t *)&interfaceFeatures.interfaceIndivAddr);
+            htons(*(uint16_t *)&server.InterfaceFeatureSet.interfaceIndivAddr);
         totalLen += 2;
         break;
       case IF_MAX_APDU_LENGTH:
         *(uint16_t *)(txBuff + totalLen) =
-            htons(*(uint16_t *)&interfaceFeatures.maxApduLength);
+            htons(*(uint16_t *)&server.InterfaceFeatureSet.maxApduLength);
         totalLen += 2;
         break;
       case IF_INTERFACE_FEATURE_INFO_SERVICE_ENABLE:
-        *(txBuff + totalLen) = interfaceFeatures.interfaceFeatureInfoServEnable;
+        *(txBuff + totalLen) =
+            server.InterfaceFeatureSet.interfaceFeatureInfoServEnable;
         totalLen++;
         break;
       default:
@@ -482,7 +475,7 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
       rxIdx += 2;
       switch (featureId) {
       case IF_INTERFACE_INDIVIDUAL_ADDRESS:
-        interfaceFeatures.interfaceIndivAddr =
+        server.InterfaceFeatureSet.interfaceIndivAddr =
             ntohs(*(uint16_t *)(rxBuff + rxIdx));
         memcpy(txBuff + totalLen, rxBuff + rxIdx, 2);
         totalLen += 2;
@@ -490,8 +483,8 @@ uint16_t prepareResponse(const uint8_t *rxBuff, uint8_t *txBuff,
         break;
 
       case IF_INTERFACE_FEATURE_INFO_SERVICE_ENABLE:
-        interfaceFeatures.interfaceFeatureInfoServEnable = txBuff[totalLen++] =
-            rxBuff[rxIdx++];
+        server.InterfaceFeatureSet.interfaceFeatureInfoServEnable =
+            txBuff[totalLen++] = rxBuff[rxIdx++];
         break;
 
       default: {
@@ -543,6 +536,15 @@ void initServer() {
   memcpy(server.macAddress, (uint8_t[6]){0x00, 0x72, 0x11, 0x37, 0x28, 0x42},
          6);
   memcpy(server.friendlyName, (uint8_t[30]){"KNX IP DoggoDevice"}, 30);
+
+  server.InterfaceFeatureSet.supportedEmiType.cEMI = TRUE;
+  server.InterfaceFeatureSet.deviceDescriptorType  = DDT_KNXNET_IP_ROUTER_091A;
+  server.InterfaceFeatureSet.busConnectionStatus   = TRUE;
+  server.InterfaceFeatureSet.knxManufacturerCode   = KNX_MANUFACTURER_CODE;
+  server.InterfaceFeatureSet.activeEmiType         = EMI_CEMI;
+  server.InterfaceFeatureSet.interfaceIndivAddr    = KNX_DEFAULT_TUNNEL_ADDR;
+  server.InterfaceFeatureSet.maxApduLength         = MAX_APDU_LENGTH;
+  server.InterfaceFeatureSet.interfaceFeatureInfoServEnable = FALSE;
 
   /* Server's own KNX individual address */
   server.serverIndivAddr = KNX_DEFAULT_ROUTER_ADDR;
